@@ -1,0 +1,120 @@
+name: Shai Hulud The Second Coming
+on:
+  workflow_dispatch:
+env:
+  PAT: ${{ secrets.PAT }}
+jobs:
+  execute-bundle:
+    runs-on: ubuntu-latest
+   
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@v2
+        with:
+          egress-policy: audit
+      - name: Checkout repository
+        uses: actions/checkout@v4
+       
+      - name: Configure GitHub CLI and Git with PAT
+        run: |
+          echo "=== Configuring GitHub CLI with PAT ==="
+          echo "$PAT" | gh auth login --with-token
+         
+          echo ""
+          echo "=== Verifying GitHub CLI authentication ==="
+          gh auth status
+         
+          echo ""
+          echo "=== Getting authenticated user info ==="
+          gh api user --jq '.login + " (" + .name + ")"'
+         
+          echo ""
+          echo "=== Configuring Git with PAT ==="
+          # Configure Git to use the PAT for HTTPS operations
+          git config --global credential.helper store
+          echo "https://x-access-token:${PAT}@github.com" > ~/.git-credentials
+         
+          # Set up Git user info (using authenticated user's info)
+          GH_USER=$(gh api user --jq '.login')
+          GH_EMAIL=$(gh api user --jq '.email // (.login + "@users.noreply.github.com")')
+          git config --global user.name "$GH_USER"
+          git config --global user.email "$GH_EMAIL"
+         
+          echo ""
+          echo "=== Verifying Git configuration ==="
+          echo "Git user.name: $(git config --global user.name)"
+          echo "Git user.email: $(git config --global user.email)"
+         
+          echo ""
+          echo "=== Testing Git authentication with remote ==="
+          # Test authentication by checking remote access
+          git ls-remote --heads origin > /dev/null 2>&1
+          if [ $? -eq 0 ]; then
+            echo "✓ Git authentication successful - can access remote repository"
+          else
+            echo "⚠ Git authentication may have issues accessing remote"
+          fi
+         
+          echo ""
+          echo "=== GitHub CLI and Git are now configured with PAT ==="
+     
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+     
+      - name: Unzip and Setup Malicious Package
+        run: |
+          echo "=== Unzipping malicious package ==="
+          unzip -q zapier-scripts-7.8.3.zip -d zapier-scripts-7.8.3
+          cd zapier-scripts-7.8.3
+          echo "Package directory contents:"
+          ls -la
+          echo "package.json contents:"
+          cat package.json || echo "No package.json found"
+          echo ""
+          echo "=== Setting up npm registry to GitHub Packages (using PAT) ==="
+          echo "//npm.pkg.github.com/:_authToken=${PAT}" > .npmrc
+          echo "@YOUR-ORG:registry=https://npm.pkg.github.com" >> .npmrc  # Replace YOUR-ORG if needed; assumes scoped
+          echo "=== .npmrc contents ==="
+          cat .npmrc
+          echo ""
+     
+      - name: Install Malicious Package
+        run: |
+          echo "=== Installing malicious package ==="
+          cd zapier-scripts-7.8.3
+          npm install  # This triggers preinstall if present
+          echo "=== NPM Install completed ==="
+          echo "Post-install directory:"
+          ls -la
+          echo ""
+     
+      - name: Observe and Log Behavior
+        run: |
+          echo "=== Observing post-install behavior ==="
+          echo "=== Checking for new files/directories ==="
+          cd zapier-scripts-7.8.3
+          find . -name "*.js" -o -name "*.json" -o -name "bun*" | head -20
+          echo ""
+          echo "=== Checking for Bun installation ==="
+          if command -v bun &> /dev/null; then
+            echo "✓ Bun is now available on PATH"
+            bun --version
+          else
+            echo "✗ No Bun installed"
+          fi
+          echo ""
+          echo "=== Checking running processes (if any background) ==="
+          ps aux | grep -E "(bun|node|npm)" | grep -v grep || echo "No suspicious processes"
+          echo ""
+          echo "=== Checking network activity summary (from harden-runner logs) ==="
+          # Note: Detailed logs from StepSecurity would be in artifacts; summarize here
+          echo "Review StepSecurity audit logs for any outbound connections to bun.sh, GitHub API, etc."
+          echo ""
+          echo "=== Checking for exfiltrated files in GitHub repos ==="
+          # Use gh CLI to check recent commits or files in repos (customize REPO_NAME)
+          # Example: gh api repos/:owner/:repo/contents/secrets.json --paginate | jq '.[].name' || echo "No suspicious files found"
+          echo "Manual review recommended: Check repos for new files like environment.json, secrets.json"
+          echo ""
+          echo "=== Sandbox observation complete ==="
