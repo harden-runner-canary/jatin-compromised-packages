@@ -1,4 +1,4 @@
-name: Shai Hulud – Malicious Package Sandbox
+name: Shai Hulud – zapier-scripts-7.8.3 Malware Analysis
 on:
   workflow_dispatch:
 
@@ -6,130 +6,106 @@ env:
   PAT: ${{ secrets.PAT }}
 
 jobs:
-  analyze-malicious-package:
+  analyze-zapier-scripts:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
-      # 1. Harden runner + audit ALL outbound traffic (critical for catching exfil)
-      - name: Harden Runner – Audit all egress
+      - name: Harden Runner – Audit ALL network traffic
         uses: step-security/harden-runner@v2
         with:
           egress-policy: audit
           allowed-endpoints: >
             github.com:443,
             api.github.com:443,
-            objects.githubusercontent.com:443,
             bun.sh:443,
             raw.githubusercontent.com:443
 
-      # 2. Checkout your repo (where the .zip is stored)
-      - name: Checkout repository
+      - name: Checkout repository (contains the malicious .zip)
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
-      # 3. Debug: Show what's actually in the repo root
-      - name: List repository root contents
+      - name: Show repo contents
         run: |
-          echo "=== Repository root contents ==="
+          echo "=== Repository root ==="
           ls -la
-          echo ""
-          echo "=== Looking for zip file ==="
           find . -name "*.zip" -ls
 
-      # 4. Extract the malicious package
-      - name: Extract zapier-scripts-7.8.3.zip
+      - name: Extract malicious package
         run: |
-          echo "=== Extracting malicious package ==="
-          unzip -o zapier-scripts-7.8.3.zip -d malicious-package
-          
-          echo "=== Extraction complete. Directory structure ==="
-          tree malicious-package || find malicious-package -print | sed -e 's;[^/]*/;|____;g;s;____|; |;g'
-          
-          echo "=== Checking for package.json ==="
-          if [ -f malicious-package/package.json ]; then
-            echo "package.json found!"
-            cat malicious-package/package.json
-          else
-            echo "ERROR: package.json not found in root of extracted archive"
-            find malicious-package -name "package.json" -type f
-            exit 1
-          fi
+          unzip -o zapier-scripts-7.8.3.zip
 
-      # 5. Set up Node.js
+          echo "=== Extraction done ==="
+          echo "Final directory layout:"
+          find malicious-package -type f | head -30
+
+          echo ""
+          echo "=== Locating the real package.json ==="
+          find malicious-package -name package.json"
+          find malicious-package -name package.json -type f
+
+      - name: Confirm package.json path
+        id: pkg
+        run: |
+          PKG_PATH=$(find malicious-package -name package.json -type f | head -n1)
+          echo "Found package.json at: $PKG_PATH"
+          echo "package_dir=$(dirname $PKG_PATH)" >> $GITHUB_OUTPUT
+          cat $PKG_PATH | jq .
+
       - name: Setup Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
 
-      # 6. Create isolated project directory
-      - name: Create clean npm project sandbox
+      - name: Install the malicious package from disk (triggers preinstall)
+        working-directory: ${{ steps.pkg.outputs.package_dir }}
         run: |
-          mkdir sandbox && cd sandbox
-          npm init -y > /dev/null
-          echo "=== Created isolated sandbox directory ==="
-          pwd
-          ls -la ../malicious-package
+          echo "=== NOW INSTALLING THE MALICIOUS PACKAGE ==="
+          echo "Current directory: $(pwd)"
+          echo "package.json name: $(jq -r '.name + "@" + .version' package.json)"
+          
+          # Force-run scripts (including preinstall)
+          npm install --foreground-scripts --ignore-scripts=false --loglevel=verbose
 
-      # 7. Install the malicious package locally from extracted folder
-      - name: Install malicious package (trigger preinstall)
-        working-directory: sandbox
+          echo "=== npm install finished ==="
+
+      - name: Post-install forensics – Did it work?
         run: |
-          echo "=== Installing malicious package from local path ==="
-          npm install ../malicious-package --foreground-scripts --ignore-scripts=false
+          echo "=== FORENSICS AFTER INSTALL ==="
           
-          echo "=== npm install completed ==="
-          echo "Contents after install:"
-          ls -la
-          
-          echo ""
-          echo "=== Checking if Bun was installed ==="
-          if command -v bun >/dev/null 2>&1; then
-            echo "BUN INSTALLED!"
+          echo "1. Was Bun downloaded and installed?"
+          if command -v bun &>/dev/null; then
+            echo "BUN IS NOW ON THE SYSTEM"
             bun --version
             which bun
+            ls -la ~/.bun/bin/ || echo "No ~/.bun/bin"
           else
-            echo "No bun in PATH (yet)"
+            echo "No bun found in PATH"
           fi
 
-      # 8. Deep post-install observation
-      - name: Post-install forensics & behavior observation
-        run: |
-          echo "=== POST-INSTALL FORENSICS ==="
-          
-          echo "1. Home directory changes (looking for ~/.bun)"
-          ls -la ~/
-          ls -la ~/.bun 2>/dev/null || echo "No ~/.bun directory"
-          
           echo ""
-          echo "2. Bun binaries"
-          find /home/runner -name "bun" -type f -executable 2>/dev/null || echo "No bun found"
-          
-          echo ""
-          echo "3. Background processes (bun/node/npm)"
-          ps aux | grep -E "(bun|node|npm|zapier)" | grep -v grep || echo "No suspicious processes"
-          
-          echo ""
-          echo "4. Recent files in /tmp and current dir"
-          find /tmp -type f -mmin -5 -ls 2>/dev/null | tail -20 || echo "No recent /tmp files"
-          find . -type f -mmin -5 -ls 2>/dev/null || echo "No recent files"
-          
-          echo ""
-          echo "5. Network connections (live)"
-          ss -tulp | grep -E "(node|bun)" || echo "No active connections"
-          
-          echo ""
-          echo "6. GitHub activity check (last 2 minutes)"
-          gh api notifications --all --since "$(date -u -d '2 minutes ago' '+%Y-%m-%dT%H:%M:%SZ')" || echo "No recent notifications"
-          
-          echo ""
-          echo "IMPORTANT:"
-          echo "Check StepSecurity 'Network Egress' tab for:"
-          echo "  • Requests to bun.sh"
-          echo "  • PUT requests to api.github.com/repos/.../contents/"
-          echo "  • Files like secrets.json, environment.json being uploaded"
-          echo ""
-          echo "Sandbox execution complete. Malware behavior should now be visible."
+          echo "2. Background processes"
+          ps aux | grep -E "(bun|node|zapier)" | grep -v grep || echo "None"
 
+          echo ""
+          echo "3. Recent files in /tmp"
+          find /tmp -type f -mmin -10 -ls 2>/dev/null | tail -15 || echo "Nothing"
+
+          echo ""
+          echo "4. Home directory changes"
+          ls -la ~/ | grep -E "(bun|.npm)" || echo "Nothing suspicious"
+
+          echo ""
+          echo "5. Critical – Check StepSecurity → Network Egress tab for:"
+          echo "   • GET bun.sh/install"
+          echo "   • PUT api.github.com/repos/.../contents/environment.json"
+          echo "   • PUT secrets.json / env-dump.json"
+          echo ""
+          echo "If you see those PUT requests → the malware successfully exfiltrated secrets using your PAT"
+
+      - name: Final warning
+        if: always()
+        run: |
+          echo ""
+          echo "ANALYSIS COMPLETE"
+          echo "Go to the workflow run → Security tab → Network Egress"
+          echo "You will likely see real exfiltration attempts to GitHub repos using your token."
