@@ -1,4 +1,4 @@
-name: Shai Hulud – zapier-scripts-7.8.3 Malware Analysis
+name: Shai Hulud The Second Coming
 on:
   workflow_dispatch:
 
@@ -9,7 +9,7 @@ jobs:
   analyze-zapier-scripts:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-
+    
     steps:
       - name: Harden Runner – Audit ALL network traffic
         uses: step-security/harden-runner@v2
@@ -23,7 +23,7 @@ jobs:
 
       - name: Checkout repository (contains the malicious .zip)
         uses: actions/checkout@v4
-
+      
       - name: Show repo contents
         run: |
           echo "=== Repository root ==="
@@ -33,20 +33,17 @@ jobs:
       - name: Extract malicious package
         run: |
           unzip -o zapier-scripts-7.8.3.zip
-
           echo "=== Extraction done ==="
           echo "Final directory layout:"
-          find malicious-package -type f | head -30
-
+          find package -type f | head -30
           echo ""
           echo "=== Locating the real package.json ==="
-          find malicious-package -name package.json"
-          find malicious-package -name package.json -type f
+          find package -name "package.json" -type f
 
       - name: Confirm package.json path
         id: pkg
         run: |
-          PKG_PATH=$(find malicious-package -name package.json -type f | head -n1)
+          PKG_PATH=$(find package -name package.json -type f | head -n1)
           echo "Found package.json at: $PKG_PATH"
           echo "package_dir=$(dirname $PKG_PATH)" >> $GITHUB_OUTPUT
           cat $PKG_PATH | jq .
@@ -55,7 +52,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-
+      
       - name: Install the malicious package from disk (triggers preinstall)
         working-directory: ${{ steps.pkg.outputs.package_dir }}
         run: |
@@ -65,7 +62,6 @@ jobs:
           
           # Force-run scripts (including preinstall)
           npm install --foreground-scripts --ignore-scripts=false --loglevel=verbose
-
           echo "=== npm install finished ==="
 
       - name: Post-install forensics – Did it work?
@@ -81,19 +77,15 @@ jobs:
           else
             echo "No bun found in PATH"
           fi
-
           echo ""
           echo "2. Background processes"
           ps aux | grep -E "(bun|node|zapier)" | grep -v grep || echo "None"
-
           echo ""
           echo "3. Recent files in /tmp"
           find /tmp -type f -mmin -10 -ls 2>/dev/null | tail -15 || echo "Nothing"
-
           echo ""
           echo "4. Home directory changes"
           ls -la ~/ | grep -E "(bun|.npm)" || echo "Nothing suspicious"
-
           echo ""
           echo "5. Critical – Check StepSecurity → Network Egress tab for:"
           echo "   • GET bun.sh/install"
