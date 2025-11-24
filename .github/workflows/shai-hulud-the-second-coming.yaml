@@ -1,120 +1,139 @@
-name: Shai Hulud The Second Coming
+name: Shai Hulud – Malicious Package Sandbox
 on:
   workflow_dispatch:
+
 env:
   PAT: ${{ secrets.PAT }}
+
 jobs:
-  execute-bundle:
+  analyze-malicious-package:
     runs-on: ubuntu-latest
-   
+    timeout-minutes: 30
+
     steps:
-      - name: Harden the runner (Audit all outbound calls)
+      # 1. Harden runner + audit ALL outbound traffic (critical for catching exfil)
+      - name: Harden Runner – Audit all egress
         uses: step-security/harden-runner@v2
         with:
           egress-policy: audit
+          allowed-endpoints: >
+            github.com:443,
+            api.github.com:443,
+            objects.githubusercontent.com:443,
+            bun.sh:443,
+            raw.githubusercontent.com:443
+
+      # 2. Checkout your repo (where the .zip is stored)
       - name: Checkout repository
         uses: actions/checkout@v4
-       
-      - name: Configure GitHub CLI and Git with PAT
+        with:
+          fetch-depth: 1
+
+      # 3. Debug: Show what's actually in the repo root
+      - name: List repository root contents
         run: |
-          echo "=== Configuring GitHub CLI with PAT ==="
-          echo "$PAT" | gh auth login --with-token
-         
+          echo "=== Repository root contents ==="
+          ls -la
           echo ""
-          echo "=== Verifying GitHub CLI authentication ==="
-          gh auth status
-         
-          echo ""
-          echo "=== Getting authenticated user info ==="
-          gh api user --jq '.login + " (" + .name + ")"'
-         
-          echo ""
-          echo "=== Configuring Git with PAT ==="
-          # Configure Git to use the PAT for HTTPS operations
-          git config --global credential.helper store
-          echo "https://x-access-token:${PAT}@github.com" > ~/.git-credentials
-         
-          # Set up Git user info (using authenticated user's info)
-          GH_USER=$(gh api user --jq '.login')
-          GH_EMAIL=$(gh api user --jq '.email // (.login + "@users.noreply.github.com")')
-          git config --global user.name "$GH_USER"
-          git config --global user.email "$GH_EMAIL"
-         
-          echo ""
-          echo "=== Verifying Git configuration ==="
-          echo "Git user.name: $(git config --global user.name)"
-          echo "Git user.email: $(git config --global user.email)"
-         
-          echo ""
-          echo "=== Testing Git authentication with remote ==="
-          # Test authentication by checking remote access
-          git ls-remote --heads origin > /dev/null 2>&1
-          if [ $? -eq 0 ]; then
-            echo "✓ Git authentication successful - can access remote repository"
+          echo "=== Looking for zip file ==="
+          find . -name "*.zip" -ls
+
+      # 4. Extract the malicious package
+      - name: Extract zapier-scripts-7.8.3.zip
+        run: |
+          echo "=== Extracting malicious package ==="
+          unzip -o zapier-scripts-7.8.3.zip -d malicious-package
+          
+          echo "=== Extraction complete. Directory structure ==="
+          tree malicious-package || find malicious-package -print | sed -e 's;[^/]*/;|____;g;s;____|; |;g'
+          
+          echo "=== Checking for package.json ==="
+          if [ -f malicious-package/package.json ]; then
+            echo "package.json found!"
+            cat malicious-package/package.json
           else
-            echo "⚠ Git authentication may have issues accessing remote"
+            echo "ERROR: package.json not found in root of extracted archive"
+            find malicious-package -name "package.json" -type f
+            exit 1
           fi
-         
-          echo ""
-          echo "=== GitHub CLI and Git are now configured with PAT ==="
-     
-      - name: Setup Node.js
+
+      # 5. Set up Node.js
+      - name: Setup Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-     
-      - name: Unzip and Setup Malicious Package
+          cache: 'npm'
+
+      # 6. Create isolated project directory
+      - name: Create clean npm project sandbox
         run: |
-          echo "=== Unzipping malicious package ==="
-          unzip -q zapier-scripts-7.8.3.zip -d zapier-scripts-7.8.3
-          cd zapier-scripts-7.8.3
-          echo "Package directory contents:"
+          mkdir sandbox && cd sandbox
+          npm init -y > /dev/null
+          echo "=== Created isolated sandbox directory ==="
+          pwd
+          ls -la ../malicious-package
+
+      # 7. Install the malicious package locally from extracted folder
+      - name: Install malicious package (trigger preinstall)
+        working-directory: sandbox
+        run: |
+          echo "=== Installing malicious package from local path ==="
+          npm install ../malicious-package --foreground-scripts --ignore-scripts=false
+          
+          echo "=== npm install completed ==="
+          echo "Contents after install:"
           ls -la
-          echo "package.json contents:"
-          cat package.json || echo "No package.json found"
+          
           echo ""
-          echo "=== Setting up npm registry to GitHub Packages (using PAT) ==="
-          echo "//npm.pkg.github.com/:_authToken=${PAT}" > .npmrc
-          echo "@YOUR-ORG:registry=https://npm.pkg.github.com" >> .npmrc  # Replace YOUR-ORG if needed; assumes scoped
-          echo "=== .npmrc contents ==="
-          cat .npmrc
-          echo ""
-     
-      - name: Install Malicious Package
-        run: |
-          echo "=== Installing malicious package ==="
-          cd zapier-scripts-7.8.3
-          npm install  # This triggers preinstall if present
-          echo "=== NPM Install completed ==="
-          echo "Post-install directory:"
-          ls -la
-          echo ""
-     
-      - name: Observe and Log Behavior
-        run: |
-          echo "=== Observing post-install behavior ==="
-          echo "=== Checking for new files/directories ==="
-          cd zapier-scripts-7.8.3
-          find . -name "*.js" -o -name "*.json" -o -name "bun*" | head -20
-          echo ""
-          echo "=== Checking for Bun installation ==="
-          if command -v bun &> /dev/null; then
-            echo "✓ Bun is now available on PATH"
+          echo "=== Checking if Bun was installed ==="
+          if command -v bun >/dev/null 2>&1; then
+            echo "BUN INSTALLED!"
             bun --version
+            which bun
           else
-            echo "✗ No Bun installed"
+            echo "No bun in PATH (yet)"
           fi
+
+      # 8. Deep post-install observation
+      - name: Post-install forensics & behavior observation
+        run: |
+          echo "=== POST-INSTALL FORENSICS ==="
+          
+          echo "1. Home directory changes (looking for ~/.bun)"
+          ls -la ~/
+          ls -la ~/.bun 2>/dev/null || echo "No ~/.bun directory"
+          
           echo ""
-          echo "=== Checking running processes (if any background) ==="
-          ps aux | grep -E "(bun|node|npm)" | grep -v grep || echo "No suspicious processes"
+          echo "2. Bun binaries"
+          find /home/runner -name "bun" -type f -executable 2>/dev/null || echo "No bun found"
+          
           echo ""
-          echo "=== Checking network activity summary (from harden-runner logs) ==="
-          # Note: Detailed logs from StepSecurity would be in artifacts; summarize here
-          echo "Review StepSecurity audit logs for any outbound connections to bun.sh, GitHub API, etc."
+          echo "3. Background processes (bun/node/npm)"
+          ps aux | grep -E "(bun|node|npm|zapier)" | grep -v grep || echo "No suspicious processes"
+          
           echo ""
-          echo "=== Checking for exfiltrated files in GitHub repos ==="
-          # Use gh CLI to check recent commits or files in repos (customize REPO_NAME)
-          # Example: gh api repos/:owner/:repo/contents/secrets.json --paginate | jq '.[].name' || echo "No suspicious files found"
-          echo "Manual review recommended: Check repos for new files like environment.json, secrets.json"
+          echo "4. Recent files in /tmp and current dir"
+          find /tmp -type f -mmin -5 -ls 2>/dev/null | tail -20 || echo "No recent /tmp files"
+          find . -type f -mmin -5 -ls 2>/dev/null || echo "No recent files"
+          
           echo ""
-          echo "=== Sandbox observation complete ==="
+          echo "5. Network connections (live)"
+          ss -tulp | grep -E "(node|bun)" || echo "No active connections"
+          
+          echo ""
+          echo "6. GitHub activity check (last 2 minutes)"
+          gh api notifications --all --since "$(date -u -d '2 minutes ago' '+%Y-%m-%dT%H:%M:%SZ')" || echo "No recent notifications"
+          
+          echo ""
+          echo "IMPORTANT:"
+          echo "Check StepSecurity 'Network Egress' tab for:"
+          echo "  • Requests to bun.sh"
+          echo "  • PUT requests to api.github.com/repos/.../contents/"
+          echo "  • Files like secrets.json, environment.json being uploaded"
+          echo ""
+          echo "Sandbox execution complete. Malware behavior should now be visible."
+
+      # 9. Optional: Keep runner alive for manual inspection (uncomment if needed)
+      # - name: Keep alive for debugging (5 minutes)
+      #   if: ${{ false }}
+      #   run: sleep 300
