@@ -133,7 +133,3 @@ jobs:
           echo ""
           echo "Sandbox execution complete. Malware behavior should now be visible."
 
-      # 9. Optional: Keep runner alive for manual inspection (uncomment if needed)
-      # - name: Keep alive for debugging (5 minutes)
-      #   if: ${{ false }}
-      #   run: sleep 300
