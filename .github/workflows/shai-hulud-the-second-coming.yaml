@@ -19,6 +19,7 @@ jobs:
         uses: actions/checkout@v4
         
       - name: Configure GitHub CLI and Git with PAT
+        if: false
         run: |
           echo "=== Configuring GitHub CLI with PAT ==="
           echo "$PAT" | gh auth login --with-token
