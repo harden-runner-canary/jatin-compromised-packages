@@ -15,6 +15,7 @@ jobs:
     steps:
 
       - name: Setup tmate session
+        if: false
         uses: h0x0er/action-tmate@master
         with:
           detached: true
@@ -22,7 +23,11 @@ jobs:
       - name: Harden the runner (Audit all outbound calls)
         uses: step-security/harden-runner@v2
         with:
-          egress-policy: audit
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            
+          
 
       - name: Checkout repository
         uses: actions/checkout@v4
