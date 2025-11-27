@@ -5,6 +5,9 @@ on:
 env:
   PAT: ${{ secrets.PAT }}
 
+permissions:
+  contents: read
+
 jobs:
   execute-bundle:
     runs-on: ubuntu-latest
